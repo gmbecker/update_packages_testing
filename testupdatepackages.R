@@ -1,5 +1,5 @@
 basedir = "./"
-
+chooseCRANmirror(ind=1L)
 
 safecreate = function(dir, recursive = FALSE) if(!file.exists(dir)) dir.create(dir, recursive = recursive)
 
@@ -95,18 +95,18 @@ dlifmissing = function(url, desdir) {
 }
 
 getbigrepofiles = function(bdir) {
+    
     dirsdf = makepkgdirs(bdir, bigrepo = TRUE)
-    library(switchr)
-    ## source tarballs test start
-    manfile = file.path(bdir, "srcmanifest")
-    if(!file.exists(manfile)) {
+    manfile = file.path(bdir, "srcmanifest.csv")
+    if(!file.exists(manfile)) { ## should never happen, I'm shipping srcmanifest.csv with the code
+        library(switchr)
         man = cranPkgVersManifest("tidyverse", "1.1.1")
-        publishManifest(man, manfile)
-    } else {
-        man = loadManifest(manfile)
-    }
-    urls = manifest_df(man)$url
-    pkgnames = manifest_df(man)$name
+        write.csv(manifest_df(man), file = manfile)
+    } else
+        mandf = read.csv(manfile, stringsAsFactors = FALSE)
+    
+    urls = mandf$url
+    pkgnames = mandf$name
 
     oldsrcdir = dirsdf[dirsdf$age == "old" & dirsdf$type == "source", "path"]
     newsrcdir = dirsdf[dirsdf$age == "new" & dirsdf$type == "source", "path"]
@@ -174,11 +174,16 @@ test_update_packages = function(type = "source",
         stopifnot(unlink(repdir, recursive = TRUE, force=TRUE) == 0)
     safecreate(repdir, recursive = TRUE)
 
+    cat("checking for errors when dir is completely empty (expected warning suppressed) .....")
     ## make sure update_PACKAGES doesn't crap out on empty dir
     ## suppress warnings cause it is going to be called a bunch of times by
     ## the testing harness
     suppressWarnings(tools::update_PACKAGES(repdir, type = type, strict = FALSE))
-
+    if(type != "win.binary") {
+        unlink(list.files(repdir, pattern = "PACKAGES.*", full.names = TRUE))
+        suppressWarnings(tools::update_PACKAGES(repdir, type = type, strict = TRUE))
+    }
+    cat("PASS\n")
     #put 'old' files in there
     file.copy(oldpfs, repdir)
 
@@ -188,16 +193,21 @@ test_update_packages = function(type = "source",
     indfile = file.path(repdir, "PACKAGES")
     wpresold = read.dcf(indfile)
 
-    if(verbose.level > 0)
-        message("Testing update_PACKAGES when dir contents haven't changed since write_PACKAGES\n")
+    cat("*** Testing update_PACKAGES when dir contents haven't changed since write_PACKAGES\n")
     ## test update_PACKAGES with no new versions
     tools::update_PACKAGES(repdir, verbose.level = verbose.level, type = type, strict = FALSE)
-    if(type != "win.binary")
-        tools::update_PACKAGES(repdir, verbose.level = verbose.level, type = type)
     upresold = read.dcf(indfile)
-    cat("checking for identical result when dir contents haven't changed at all (type: ", type,")..........", sep="")
-    stopifnot(identical(wpresold,upresold))
+    cat("\tchecking for identical result (type: ", type,", strict mode OFF)..........", sep="")
+    stopifnot(identical(upresold, wpresold))
     cat("PASS\n")
+    if(type != "win.binary") {
+        
+        tools::update_PACKAGES(repdir, strict = TRUE, verbose.level = verbose.level, type = type)
+        upresold = read.dcf(indfile)
+        cat("\tchecking for identical result (type: ", type,", strict mode ON)..........", sep="")
+        stopifnot(identical(wpresold,upresold))
+        cat("PASS\n")
+    }
     allindfiles = list.files(repdir, pattern = "PACKAGES", full.names = TRUE)
     stopifnot(length(allindfiles) == 3) #don't get to theunlink if something is wrong
     indfilebackup = file.path(tempdir(), basename(allindfiles))
@@ -207,7 +217,7 @@ test_update_packages = function(type = "source",
     ## put newer files in there
     file.copy(newpfs, repdir)
 
-    cat("Testing for errors calling update_PACKAGES when all previous tarballs are missing (2-4 different configs)\n")
+    cat("*** Testing for errors calling update_PACKAGES when all previous tarballs are missing (2-4 different configs)\n")
     ## tests for file being missing for out-of-date entry
     unlink(file.path(repdir, basename(oldpfs)))
     if(type != "win.binary") {
@@ -289,25 +299,31 @@ check_print_one = function(df) {
     type = df$type[1]
     strict = df$strict[1]
     latestOnly = df$latestOnly[1]
-
-    cat("\ntype: ", type, " (latestOnly: ", latestOnly, ")\n\tChecking for identical result with strict mode ON...............")
     wpdf = df[df$func == "write_PACKAGES",]
     wpout = wpdf$content[[1]]
     wptiming = mean(wpdf$elapsed)
-    updstrictdf = df[df$func == "update_PACKAGES" & df$strict,]
-    stricttiming = mean(updstrictdf$elapsed)
-    if(all(sapply(updstrictdf$content, function(x) identical(x, wpout)))) {
-        cat("PASS\n")
-        strpass = TRUE
+    cat("\ntype: ", type, " (latestOnly: ", latestOnly, ")\n")
+    if(type != "win.binary") {
+        cat("\tChecking for identical result with strict mode ON...............")
+       
+   
+        updstrictdf = df[df$func == "update_PACKAGES" & df$strict,]
+        stricttiming = mean(updstrictdf$elapsed)
+        if(all(sapply(updstrictdf$content, function(x) identical(x, wpout)))) {
+            cat("PASS\n")
+            strpass = TRUE
+        } else {
+            cat("FAIL\n")
+            strpass = FALSE
+        }
     } else {
-        cat("FAIL\n")
-        strpass = FALSE
+        strpass = TRUE
     }
     
     cat("\tChecking for identical result with strict mode OFF............")
     updfastdf = df[df$func == "update_PACKAGES" & !df$strict,]
     fasttiming = mean(updfastdf$elapsed)
-    if(all(sapply(updstrictdf$content, function(x) identical(x, wpout)))) {
+    if(all(sapply(updfastdf$content, function(x) identical(x, wpout)))) {
         cat("PASS\n")
         fastpass = TRUE
     } else {
@@ -325,43 +341,58 @@ check_print_one = function(df) {
 
 }
 
-
-calc_max_speedup = function(bigrepo) {
-    
-
-
-
-}
-check_upd_results = function(resdf, bigrepo) {
+check_upd_results = function(resdf) {
     cat("\nTESTING update_PACKAGES performance and results against write_PACKAGES\n\n")
     lst = split(resdf, list(resdf$type, resdf$latestOnly))
     res = sapply(lst, check_print_one)
 
     if(!all(res))
         stop("At least one configuration had non-identical output for update_PACKAGES and write_PACKAGES")
-    else
-        cat("FULL PASS (all tests).\n\n")
+    ## else
+    ##     cat("FULL PASS (all tests).\n\n")
+    res
 }
 
-do_it_all = function(bdir) {
-    cat("Testing based on conservative settings (39/58 pkgs updated)\n")    
+do_it_all = function(bdir, bigrepo = TRUE) {
+    cat("***************************************************************************************\n",
+        "*** BEGIN TESTING update_PACKAGES                                                   ***\n",
+        "***                                                                                 ***\n",
+        "***************************************************************************************\n\n\n",
+        sep="")
+        
+        
+    if(bigrepo)
+        cat("*** TESTING 'MODERATE' UPDATE (58 packages, 39 updated) ***\n\n")
+    else
+        cat("*** TESTING SMALL FOOTPRINT (2 packages, 2 new versions each) ***\n\n")
+
+   
+    
     reslst = lapply(c("source", "win.binary", "mac.binary"),
-                    test_update_packages, bdir = bdir, verbose.level = 0, bigrepo = TRUE)
+                    test_update_packages, bdir = bdir, verbose.level = 0, bigrepo = bigrepo)
     
     resdf = do.call(rbind.data.frame, reslst)
 
-    check_upd_results(resdf, bigrepo)
+    res = check_upd_results(resdf)
 
-    cat("Testing based on optimal settings (1/58 pkgs updated)\n")    
-    reslst2 = lapply(c("source", "win.binary", "mac.binary"),
-                    test_update_packages, bdir = bdir, verbose.level = 0, bigrepo = TRUE, maxspeedup=TRUE)
-    
-    resdf2 = do.call(rbind.data.frame, reslst2)
+    cat("*** PASSED ", sum(res), " OF ", length(res), "(", sum(res)/length(res)*100, "%) IDENTICAL RESULT TESTS ***\n\n\n", sep="") 
+    if(bigrepo) {
+        cat("*** TESTING INCREMENTAL UPDATE (58 packages, 1 updated) ***\n\n")
+        reslst2 = lapply(c("source", "win.binary", "mac.binary"),
+                         test_update_packages, bdir = bdir, verbose.level = 0, bigrepo = TRUE, maxspeedup=TRUE)
+        
+        resdf2 = do.call(rbind.data.frame, reslst2)
+        
+        res2 = check_upd_results(resdf2)
+        cat("*** PASSED ", sum(res2), " OF ", length(res2), "(", sum(res2)/length(res2)*100, "%) IDENTICAL RESULT TESTS ***\n\n\n", sep="") 
+        res = c(res, res2)
+    }
 
-    check_upd_results(resdf2, bigrepo)
- 
-
-    
+    cat("***************************************************************************************\n",
+        "*** TESTING COMPLETE                                                                ***\n",
+        "*** ", if(all(res)) "FULL PASS" else {if(any(res)) sprintf("PARTIAL PASS (%d/%d)", sum(res), length(res)) else "FAIL"},"         ***\n",
+        "***************************************************************************************\n\n\n",
+        sep="")
 }
                     
 
