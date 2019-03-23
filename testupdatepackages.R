@@ -1,4 +1,7 @@
-basedir = "./"
+
+## modify this to have the script put the packages and fake repository file somewhere else.
+## be sure to put the srcmanifest.csv file in that directory
+bdir = "./"
 chooseCRANmirror(ind=1L)
 
 safecreate = function(dir, recursive = FALSE) if(!file.exists(dir)) dir.create(dir, recursive = recursive)
@@ -396,13 +399,4 @@ do_it_all = function(bdir, bigrepo = TRUE) {
 }
                     
 
-
-
-
-##XXXXXX
-format(c(TRUE,FALSE)) #has space in front of the true, so
-as.logical(format(c(TRUE,FALSE))) #doesn't work
-## problem for as.matrix(data.frame) which is done by apply.data.frame????
-
-## XXXXXXXX
-NROW(rbind(character(), character())) #not 0!!!!
+do_it_all(bdir = bdir)
